@@ -1,0 +1,24 @@
+# coverage:
+#   status:
+#     project:
+#       default:
+#         target: auto
+#         threshold: 1%
+#     patch:
+#       default:
+#         target: 70%
+
+# comment:
+#   layout: "reach, diff, flags, files"
+#   behavior: default
+#   require_changes: false
+
+# ignore:
+#   - "**/*_test.go"
+#   - "**/mock/**"
+#   - "cmd/**"
+#   - "scripts/**"
+#   - "docs/**"
+#   - "assets/**"
+#   - "migrations/**"
+#   - "**/*.sql"
