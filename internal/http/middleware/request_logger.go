@@ -38,11 +38,17 @@ func RequestLogger(cfg config.LoggingConfig, logger *logging.Logger) gin.Handler
 		userAgent := ctx.Request.UserAgent()
 		contentType := ctx.GetHeader("Content-Type")
 		contentLength := ctx.Request.ContentLength
+		errStr := strings.TrimSpace(ctx.Errors.ByType(gin.ErrorTypeAny).String())
+		level := "INFO"
+		if status >= http.StatusBadRequest || errStr != "" {
+			level = "ERROR"
+		}
 
 		var b strings.Builder
 		b.Grow(256 + len(bodyStr))
-		fmt.Fprintf(&b, "ts=%s level=INFO msg=\"http request\" method=%s path=%s status=%d latency=%s ip=%s",
+		fmt.Fprintf(&b, "ts=%s level=%s msg=\"http request\" method=%s path=%s status=%d latency=%s ip=%s",
 			start.UTC().Format(time.RFC3339Nano),
+			level,
 			method,
 			path,
 			status,
@@ -68,6 +74,10 @@ func RequestLogger(cfg config.LoggingConfig, logger *logging.Logger) gin.Handler
 
 		if bodyStr != "" {
 			fmt.Fprintf(&b, " body=%s", strconv.Quote(bodyStr))
+		}
+
+		if errStr != "" {
+			fmt.Fprintf(&b, " error=%s", strconv.Quote(errStr))
 		}
 
 		if logger != nil {

@@ -35,7 +35,13 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, logger))
 	log.Printf("config loaded:\n%s", config.FormatForLog(cfg))
 
-	router := httpserver.NewRouter(cfg, logger)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	router, err := httpserver.NewRouter(ctx, cfg, logger)
+	if err != nil {
+		log.Fatalf("router init error: %v", err)
+	}
 	srv := &nethttp.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           router,
@@ -44,9 +50,6 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		log.Printf("server listening on %s", cfg.HTTPAddr)

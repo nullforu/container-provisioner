@@ -1,6 +1,8 @@
 package http
 
 import (
+	"context"
+	"fmt"
 	"io"
 	nethttp "net/http"
 	"os"
@@ -9,11 +11,12 @@ import (
 	"smctf/internal/http/handlers"
 	"smctf/internal/http/middleware"
 	"smctf/internal/logging"
+	"smctf/internal/stack"
 
 	"github.com/gin-gonic/gin"
 )
 
-func NewRouter(cfg config.Config, logger *logging.Logger) *gin.Engine {
+func NewRouter(ctx context.Context, cfg config.Config, logger *logging.Logger) (*gin.Engine, error) {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -23,18 +26,39 @@ func NewRouter(cfg config.Config, logger *logging.Logger) *gin.Engine {
 		gin.DefaultErrorWriter = io.MultiWriter(os.Stderr, logger)
 	}
 
+	repo, err := stack.NewRepositoryFromConfig(ctx, cfg.Stack)
+	if err != nil {
+		return nil, fmt.Errorf("init repository: %w", err)
+	}
+	k8s, err := stack.NewKubernetesClientFromConfig(cfg.Stack)
+	if err != nil {
+		return nil, fmt.Errorf("init kubernetes client: %w", err)
+	}
+
+	service := stack.NewService(cfg.Stack, repo, k8s)
+	scheduler := stack.NewScheduler(cfg.Stack.SchedulerInterval, service)
+	go scheduler.Run(ctx)
+
+	h := handlers.New(service)
+
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger(cfg.Logging, logger))
 
-	_ = handlers.New(cfg)
-
-	r.GET("/healthz", func(ctx *gin.Context) {
-		ctx.JSON(nethttp.StatusOK, gin.H{"status": "ok"})
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(nethttp.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// api := r.Group("/api")
+	r.POST("/stacks", h.CreateStack)
+	r.GET("/stacks", h.ListStacks)
+	r.GET("/stacks/:stack_id", h.GetStack)
+	r.GET("/stacks/:stack_id/status", h.GetStackStatus)
+	r.DELETE("/stacks/:stack_id", h.DeleteStack)
+	r.GET("/users/:user_id/stacks", h.ListUserStacks)
+	r.GET("/stats", h.GetStats)
 
-	return r
+	attachFrontendRoutes(r)
+
+	return r, nil
 }

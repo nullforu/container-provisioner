@@ -1,0 +1,460 @@
+package stack
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"smctf/internal/config"
+)
+
+type Service struct {
+	cfg       config.StackConfig
+	repo      Repository
+	k8s       KubernetesClient
+	validator *Validator
+	now       func() time.Time
+}
+
+func NewService(cfg config.StackConfig, repo Repository, k8s KubernetesClient) *Service {
+	return &Service{
+		cfg:       cfg,
+		repo:      repo,
+		k8s:       k8s,
+		validator: NewValidator(cfg),
+		now: func() time.Time {
+			return time.Now().UTC()
+		},
+	}
+}
+
+func (s *Service) Create(ctx context.Context, in CreateInput) (Stack, error) {
+	if in.UserID <= 0 || in.ProblemID <= 0 {
+		return Stack{}, fmt.Errorf("%w: user_id/problem_id must be positive", ErrInvalidInput)
+	}
+
+	valid, err := s.validator.ValidatePodSpec(in.PodSpecYML, in.TargetPort)
+	if err != nil {
+		return Stack{}, err
+	}
+
+	nodePort, err := s.repo.ReserveNodePort(ctx, s.cfg.NodePortMin, s.cfg.NodePortMax)
+	if err != nil {
+		return Stack{}, err
+	}
+
+	releasePort := true
+	defer func() {
+		if releasePort {
+			if err := s.repo.ReleaseNodePort(context.Background(), nodePort); err != nil {
+				log.Printf("level=ERROR msg=\"release reserved nodeport failed\" node_port=%d err=%q", nodePort, err.Error())
+			}
+		}
+	}()
+
+	stackID := newStackID()
+	now := s.now()
+	st := Stack{
+		StackID:        stackID,
+		UserID:         in.UserID,
+		ProblemID:      in.ProblemID,
+		Namespace:      s.cfg.Namespace,
+		PodSpecYAML:    valid.SanitizedYAML,
+		TargetPort:     in.TargetPort,
+		NodePort:       nodePort,
+		Status:         StatusCreating,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		TTLExpiresAt:   now.Add(s.cfg.StackTTL),
+		RequestedMilli: valid.RequestedMilli,
+		RequestedBytes: valid.RequestedBytes,
+	}
+
+	result, err := s.k8s.CreatePodAndService(ctx, ProvisionRequest{
+		Namespace:  s.cfg.Namespace,
+		StackID:    stackID,
+		PodSpecYML: valid.SanitizedYAML,
+		TargetPort: in.TargetPort,
+		NodePort:   nodePort,
+	})
+	if err != nil {
+		return Stack{}, mapProvisionError(err)
+	}
+
+	st.PodID = result.PodID
+	st.ServiceName = result.ServiceName
+	st.NodeID = result.NodeID
+	st.Status = result.Status
+
+	constraints := CreateConstraints{
+		MaxStacksPerUser:       s.cfg.MaxStacksPerUser,
+		MaxReservedCPUMilli:    int64(float64(s.cfg.ClusterTotalCPUMilli) * (1 - s.cfg.ResourceReserveRatio)),
+		MaxReservedMemoryBytes: int64(float64(s.cfg.ClusterTotalMemoryBytes) * (1 - s.cfg.ResourceReserveRatio)),
+	}
+	if err := s.repo.Create(ctx, st, constraints); err != nil {
+		if k8sErr := s.k8s.DeletePodAndService(context.Background(), st.Namespace, st.PodID, st.ServiceName); k8sErr != nil {
+			log.Printf("level=ERROR msg=\"rollback delete pod/service failed\" stack_id=%s pod_id=%s service_name=%s err=%q", st.StackID, st.PodID, st.ServiceName, k8sErr.Error())
+		}
+
+		return Stack{}, err
+	}
+
+	releasePort = false
+
+	return st, nil
+}
+
+func (s *Service) Get(ctx context.Context, stackID string) (Stack, error) {
+	st, ok, err := s.repo.Get(ctx, stackID)
+	if err != nil {
+		return Stack{}, err
+	}
+
+	if !ok {
+		return Stack{}, ErrNotFound
+	}
+
+	return st, nil
+}
+
+func (s *Service) GetStatus(ctx context.Context, stackID string) (Status, error) {
+	detail, err := s.GetStatusDetail(ctx, stackID)
+	if err != nil {
+		return "", err
+	}
+
+	return detail.Status, nil
+}
+
+func (s *Service) GetStatusDetail(ctx context.Context, stackID string) (StackStatusDetail, error) {
+	st, ok, err := s.repo.Get(ctx, stackID)
+	if err != nil {
+		return StackStatusDetail{}, err
+	}
+
+	if !ok {
+		return StackStatusDetail{}, ErrNotFound
+	}
+
+	nodeExists, err := s.k8s.NodeExists(ctx, st.NodeID)
+	if err != nil {
+		return StackStatusDetail{}, err
+	}
+
+	if !nodeExists {
+		if err := s.k8s.DeletePodAndService(ctx, st.Namespace, st.PodID, st.ServiceName); err != nil {
+			log.Printf("level=ERROR msg=\"delete pod/service on missing node failed\" stack_id=%s pod_id=%s service_name=%s err=%q", st.StackID, st.PodID, st.ServiceName, err.Error())
+		}
+
+		if _, _, err := s.repo.Delete(ctx, st.StackID); err != nil {
+			log.Printf("level=ERROR msg=\"delete stack from repository on missing node failed\" stack_id=%s err=%q", st.StackID, err.Error())
+		}
+
+		return StackStatusDetail{}, ErrNotFound
+	}
+
+	status, nodeID, err := s.k8s.GetPodStatus(ctx, st.Namespace, st.PodID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			if _, _, deleteErr := s.repo.Delete(ctx, st.StackID); deleteErr != nil {
+				log.Printf("level=ERROR msg=\"delete stack after missing pod failed\" stack_id=%s err=%q", st.StackID, deleteErr.Error())
+			}
+
+			return StackStatusDetail{}, ErrNotFound
+		}
+
+		return StackStatusDetail{}, err
+	}
+
+	if status == StatusNodeDeleted {
+		if err := s.k8s.DeletePodAndService(ctx, st.Namespace, st.PodID, st.ServiceName); err != nil {
+			log.Printf("level=ERROR msg=\"delete pod/service on node_deleted failed\" stack_id=%s pod_id=%s service_name=%s err=%q", st.StackID, st.PodID, st.ServiceName, err.Error())
+		}
+
+		if _, _, err := s.repo.Delete(ctx, st.StackID); err != nil {
+			log.Printf("level=ERROR msg=\"delete stack from repository on node_deleted failed\" stack_id=%s err=%q", st.StackID, err.Error())
+		}
+
+		return StackStatusDetail{}, ErrNotFound
+	}
+
+	if err := s.repo.UpdateStatus(ctx, st.StackID, status, nodeID); err != nil {
+		log.Printf("level=ERROR msg=\"update stack status failed\" stack_id=%s status=%s node_id=%s err=%q", st.StackID, status, nodeID, err.Error())
+	}
+
+	return StackStatusDetail{
+		StackID:    st.StackID,
+		Status:     status,
+		TTL:        st.TTLExpiresAt,
+		NodePort:   st.NodePort,
+		TargetPort: st.TargetPort,
+	}, nil
+}
+
+func (s *Service) Delete(ctx context.Context, stackID string) error {
+	st, ok, err := s.repo.Get(ctx, stackID)
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return ErrNotFound
+	}
+
+	if err := s.k8s.DeletePodAndService(ctx, st.Namespace, st.PodID, st.ServiceName); err != nil {
+		log.Printf("level=ERROR msg=\"delete pod/service failed\" stack_id=%s pod_id=%s service_name=%s err=%q", st.StackID, st.PodID, st.ServiceName, err.Error())
+	}
+
+	_, _, err = s.repo.Delete(ctx, stackID)
+
+	return err
+}
+
+func (s *Service) ListByUser(ctx context.Context, userID int64) ([]Stack, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("%w: user_id must be positive", ErrInvalidInput)
+	}
+
+	return s.repo.ListByUser(ctx, userID)
+}
+
+func (s *Service) ListAll(ctx context.Context) ([]Stack, error) {
+	return s.repo.ListAll(ctx)
+}
+
+func (s *Service) Stats(ctx context.Context) (Stats, error) {
+	items, err := s.repo.ListAll(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
+
+	usedPorts, err := s.repo.UsedNodePortCount(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
+
+	stats := Stats{
+		NodeDistribution: make(map[string]int),
+		UsedNodePorts:    usedPorts,
+	}
+
+	for _, st := range items {
+		stats.TotalStacks++
+		if st.Status == StatusRunning || st.Status == StatusCreating {
+			stats.ActiveStacks++
+		}
+		stats.NodeDistribution[st.NodeID]++
+		stats.ReservedCPUMilli += st.RequestedMilli
+		stats.ReservedMemoryBytes += st.RequestedBytes
+	}
+
+	return stats, nil
+}
+
+func (s *Service) CleanupExpiredAndOrphaned(ctx context.Context) {
+	now := s.now()
+	items, err := s.repo.ListAll(ctx)
+	if err != nil {
+		log.Printf("level=ERROR msg=\"list stacks for cleanup failed\" err=%q", err.Error())
+		log.Printf("level=INFO msg=\"cleanup loop completed\" scanned=0 targets=0 cleaned=0 failures=1 resource_scan_errors=0 orphan_scan_errors=0 note=%q", "list stacks failed")
+
+		return
+	}
+
+	scanned := len(items)
+	expiredTargets := 0
+	missingResourceTargets := 0
+	orphanPodTargets := 0
+	cleaned := 0
+	failures := 0
+	resourceScanErrors := 0
+	orphanScanErrors := 0
+
+	for _, st := range items {
+		if st.TTLExpiresAt.Before(now) || st.TTLExpiresAt.Equal(now) {
+			expiredTargets++
+			failed := false
+			if err := s.k8s.DeletePodAndService(ctx, st.Namespace, st.PodID, st.ServiceName); err != nil {
+				log.Printf("level=ERROR msg=\"cleanup delete pod/service failed\" stack_id=%s pod_id=%s service_name=%s err=%q", st.StackID, st.PodID, st.ServiceName, err.Error())
+				failed = true
+			}
+
+			if _, _, err := s.repo.Delete(ctx, st.StackID); err != nil {
+				log.Printf("level=ERROR msg=\"cleanup delete stack from repository failed\" stack_id=%s err=%q", st.StackID, err.Error())
+				failed = true
+			}
+
+			if failed {
+				failures++
+			} else {
+				cleaned++
+			}
+		}
+	}
+
+	remainingStacks, err := s.repo.ListAll(ctx)
+	if err != nil {
+		orphanScanErrors++
+		failures++
+		log.Printf("level=ERROR msg=\"list stacks for orphan pod cleanup failed\" err=%q", err.Error())
+	} else {
+		podIDs, podErr := s.k8s.ListPods(ctx, s.cfg.Namespace)
+		if podErr != nil {
+			resourceScanErrors++
+			failures++
+			log.Printf("level=ERROR msg=\"list kubernetes pods for stack resource integrity failed\" namespace=%s err=%q", s.cfg.Namespace, podErr.Error())
+		}
+
+		serviceNames, svcErr := s.k8s.ListServices(ctx, s.cfg.Namespace)
+		if svcErr != nil {
+			resourceScanErrors++
+			failures++
+			log.Printf("level=ERROR msg=\"list kubernetes services for stack resource integrity failed\" namespace=%s err=%q", s.cfg.Namespace, svcErr.Error())
+		}
+
+		if podErr == nil && svcErr == nil {
+			podSet := make(map[string]struct{}, len(podIDs))
+			for _, podID := range podIDs {
+				podSet[podID] = struct{}{}
+			}
+
+			serviceSet := make(map[string]struct{}, len(serviceNames))
+			for _, serviceName := range serviceNames {
+				serviceSet[serviceName] = struct{}{}
+			}
+
+			for _, st := range remainingStacks {
+				_, podExists := podSet[st.PodID]
+				_, serviceExists := serviceSet[st.ServiceName]
+				if podExists && serviceExists {
+					continue
+				}
+
+				missingResourceTargets++
+				failed := false
+				if err := s.k8s.DeletePodAndService(ctx, st.Namespace, st.PodID, st.ServiceName); err != nil {
+					log.Printf("level=ERROR msg=\"cleanup delete stale stack resources failed\" stack_id=%s pod_id=%s service_name=%s err=%q", st.StackID, st.PodID, st.ServiceName, err.Error())
+					failed = true
+				}
+
+				if _, _, err := s.repo.Delete(ctx, st.StackID); err != nil {
+					log.Printf("level=ERROR msg=\"cleanup delete stack with missing pod/service failed\" stack_id=%s pod_exists=%t service_exists=%t err=%q", st.StackID, podExists, serviceExists, err.Error())
+					failed = true
+				}
+
+				if failed {
+					failures++
+				} else {
+					cleaned++
+				}
+			}
+		}
+
+		remainingStacks, err = s.repo.ListAll(ctx)
+		if err != nil {
+			orphanScanErrors++
+			failures++
+			log.Printf("level=ERROR msg=\"list stacks after resource integrity cleanup failed\" err=%q", err.Error())
+		} else {
+			registeredPods := make(map[string]struct{}, len(remainingStacks))
+			for _, st := range remainingStacks {
+				if st.PodID == "" {
+					continue
+				}
+
+				registeredPods[st.PodID] = struct{}{}
+			}
+
+			podIDs, err := s.k8s.ListPods(ctx, s.cfg.Namespace)
+			if err != nil {
+				orphanScanErrors++
+				failures++
+				log.Printf("level=ERROR msg=\"list kubernetes pods for orphan cleanup failed\" namespace=%s err=%q", s.cfg.Namespace, err.Error())
+			} else {
+				for _, podID := range podIDs {
+					if _, ok := registeredPods[podID]; ok {
+						continue
+					}
+
+					orphanPodTargets++
+					if err := s.k8s.DeletePodAndService(ctx, s.cfg.Namespace, podID, ""); err != nil {
+						failures++
+						log.Printf("level=ERROR msg=\"cleanup delete orphan pod failed\" namespace=%s pod_id=%s err=%q", s.cfg.Namespace, podID, err.Error())
+						continue
+					}
+
+					cleaned++
+				}
+			}
+		}
+	}
+
+	targets := expiredTargets + missingResourceTargets + orphanPodTargets
+	if targets == 0 {
+		log.Printf("level=INFO msg=\"cleanup loop completed\" scanned=%d targets=0 cleaned=0 failures=%d resource_scan_errors=%d orphan_scan_errors=%d note=%q", scanned, failures, resourceScanErrors, orphanScanErrors, "no cleanup candidates")
+
+		return
+	}
+
+	log.Printf(
+		"level=INFO msg=\"cleanup loop completed\" scanned=%d targets=%d expired_targets=%d missing_resource_targets=%d orphan_pod_targets=%d cleaned=%d failures=%d resource_scan_errors=%d orphan_scan_errors=%d",
+		scanned,
+		targets,
+		expiredTargets,
+		missingResourceTargets,
+		orphanPodTargets,
+		cleaned,
+		failures,
+		resourceScanErrors,
+		orphanScanErrors,
+	)
+}
+
+func newStackID() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("stack-%d", time.Now().UnixNano())
+	}
+
+	return "stack-" + hex.EncodeToString(buf)
+}
+
+func mapProvisionError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, ErrClusterSaturated) || errors.Is(err, ErrPodSpecInvalid) {
+		return err
+	}
+
+	lowerMsg := strings.ToLower(err.Error())
+	if isQuotaExceededMessage(lowerMsg) {
+		return fmt.Errorf("%w: %v", ErrClusterSaturated, err)
+	}
+
+	if isLimitRangeExceededMessage(lowerMsg) {
+		return fmt.Errorf("%w: %v", ErrPodSpecInvalid, err)
+	}
+
+	return fmt.Errorf("k8s provision failed: %w", err)
+}
+
+func isQuotaExceededMessage(msg string) bool {
+	return strings.Contains(msg, "exceeded quota") ||
+		strings.Contains(msg, "exceeds quota") ||
+		strings.Contains(msg, "resourcequota")
+}
+
+func isLimitRangeExceededMessage(msg string) bool {
+	return strings.Contains(msg, "limitrange") ||
+		strings.Contains(msg, "limit range") ||
+		(strings.Contains(msg, "per container") && strings.Contains(msg, "limit is")) ||
+		strings.Contains(msg, "must be less than or equal to") ||
+		strings.Contains(msg, "must be greater than or equal to")
+}

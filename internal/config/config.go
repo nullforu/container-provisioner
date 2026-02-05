@@ -17,6 +17,7 @@ type Config struct {
 	ShutdownTimeout time.Duration
 
 	Logging LoggingConfig
+	Stack   StackConfig
 }
 
 type LoggingConfig struct {
@@ -30,6 +31,35 @@ type LoggingConfig struct {
 	WebhookBatchSize  int
 	WebhookBatchWait  time.Duration
 	WebhookMaxChars   int
+}
+
+type StackConfig struct {
+	Namespace               string
+	MaxStacksPerUser        int
+	StackTTL                time.Duration
+	SchedulerInterval       time.Duration
+	NodePortMin             int
+	NodePortMax             int
+	PortLockTTL             time.Duration
+	ResourceReserveRatio    float64
+	MaxCPUPerStackMilli     int64
+	MaxMemoryPerStackBytes  int64
+	ClusterTotalCPUMilli    int64
+	ClusterTotalMemoryBytes int64
+
+	DynamoTableName      string
+	AWSRegion            string
+	AWSEndpoint          string
+	AWSProfile           string
+	DynamoConsistentRead bool
+	UseMockRepository    bool
+
+	KubeConfigPath    string
+	KubeContext       string
+	K8sQPS            float64
+	K8sBurst          int
+	SchedulingTimeout time.Duration
+	UseMockKubernetes bool
 }
 
 func Load() (Config, error) {
@@ -78,6 +108,89 @@ func Load() (Config, error) {
 		errs = append(errs, err)
 	}
 
+	maxStacksPerUser, err := getEnvInt("STACK_MAX_PER_USER", 5)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	stackTTL, err := getDuration("STACK_TTL", 2*time.Hour)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	schedulerInterval, err := getDuration("STACK_SCHEDULER_INTERVAL", 10*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	nodePortMin, err := getEnvInt("STACK_NODEPORT_MIN", 30000)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	nodePortMax, err := getEnvInt("STACK_NODEPORT_MAX", 32767)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	reserveRatio, err := getEnvFloat64("STACK_RESOURCE_RESERVE_RATIO", 0.20)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	portLockTTL, err := getDuration("STACK_PORT_LOCK_TTL", 30*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	maxCPUPerStackMilli, err := getEnvCPUMilli("STACK_MAX_CPU", "2")
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	maxMemoryPerStackBytes, err := getEnvBytes("STACK_MAX_MEMORY", "512Mi")
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	clusterTotalCPUMilli, err := getEnvCPUMilli("CLUSTER_TOTAL_CPU", "100")
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	clusterTotalMemoryBytes, err := getEnvBytes("CLUSTER_TOTAL_MEMORY", "64Gi")
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	useMockK8s, err := getEnvBool("K8S_USE_MOCK", false)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	useMockRepo, err := getEnvBool("DDB_USE_MOCK", false)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	dynamoConsistentRead, err := getEnvBool("DDB_CONSISTENT_READ", true)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	k8sQPS, err := getEnvFloat64("K8S_CLIENT_QPS", 20)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	k8sBurst, err := getEnvInt("K8S_CLIENT_BURST", 40)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	schedulingTimeout, err := getDuration("STACK_SCHEDULING_TIMEOUT", 20*time.Second)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
 	cfg := Config{
 		AppEnv:          appEnv,
 		HTTPAddr:        httpAddr,
@@ -93,6 +206,32 @@ func Load() (Config, error) {
 			WebhookBatchSize:  logWebhookBatchSize,
 			WebhookBatchWait:  logWebhookBatchWait,
 			WebhookMaxChars:   logWebhookMaxChars,
+		},
+		Stack: StackConfig{
+			Namespace:               getEnv("STACK_NAMESPACE", "stacks"),
+			MaxStacksPerUser:        maxStacksPerUser,
+			StackTTL:                stackTTL,
+			SchedulerInterval:       schedulerInterval,
+			NodePortMin:             nodePortMin,
+			NodePortMax:             nodePortMax,
+			PortLockTTL:             portLockTTL,
+			ResourceReserveRatio:    reserveRatio,
+			MaxCPUPerStackMilli:     maxCPUPerStackMilli,
+			MaxMemoryPerStackBytes:  maxMemoryPerStackBytes,
+			ClusterTotalCPUMilli:    clusterTotalCPUMilli,
+			ClusterTotalMemoryBytes: clusterTotalMemoryBytes,
+			DynamoTableName:         getEnv("DDB_STACK_TABLE", "smctf-stacks"),
+			AWSRegion:               getEnv("AWS_REGION", "us-east-1"),
+			AWSEndpoint:             getEnv("AWS_ENDPOINT", ""),
+			AWSProfile:              getEnv("AWS_PROFILE", ""),
+			DynamoConsistentRead:    dynamoConsistentRead,
+			UseMockRepository:       useMockRepo,
+			KubeConfigPath:          getEnv("K8S_KUBECONFIG", ""),
+			KubeContext:             getEnv("K8S_CONTEXT", ""),
+			K8sQPS:                  k8sQPS,
+			K8sBurst:                k8sBurst,
+			SchedulingTimeout:       schedulingTimeout,
+			UseMockKubernetes:       useMockK8s,
 		},
 	}
 
@@ -130,6 +269,20 @@ func getEnvInt(key string, def int) (int, error) {
 	return n, nil
 }
 
+func getEnvFloat64(key string, def float64) (float64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def, fmt.Errorf("%s must be a number", key)
+	}
+
+	return f, nil
+}
+
 func getEnvBool(key string, def bool) (bool, error) {
 	v := os.Getenv(key)
 	if v == "" {
@@ -156,6 +309,34 @@ func getDuration(key string, def time.Duration) (time.Duration, error) {
 	}
 
 	return d, nil
+}
+
+func getEnvCPUMilli(key, def string) (int64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		v = def
+	}
+
+	milli, err := ParseCPUMilli(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s invalid cpu: %w", key, err)
+	}
+
+	return milli, nil
+}
+
+func getEnvBytes(key, def string) (int64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		v = def
+	}
+
+	b, err := ParseBytes(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s invalid memory: %w", key, err)
+	}
+
+	return b, nil
 }
 
 func validateConfig(cfg Config) error {
@@ -195,6 +376,64 @@ func validateConfig(cfg Config) error {
 
 	if cfg.Logging.WebhookMaxChars <= 0 {
 		errs = append(errs, errors.New("LOG_WEBHOOK_MAX_CHARS must be positive"))
+	}
+
+	if cfg.Stack.Namespace == "" {
+		errs = append(errs, errors.New("STACK_NAMESPACE must not be empty"))
+	}
+
+	if cfg.Stack.MaxStacksPerUser <= 0 {
+		errs = append(errs, errors.New("STACK_MAX_PER_USER must be positive"))
+	}
+
+	if cfg.Stack.StackTTL <= 0 {
+		errs = append(errs, errors.New("STACK_TTL must be positive"))
+	}
+
+	if cfg.Stack.SchedulerInterval <= 0 {
+		errs = append(errs, errors.New("STACK_SCHEDULER_INTERVAL must be positive"))
+	}
+
+	if cfg.Stack.NodePortMin < 1 || cfg.Stack.NodePortMax > 65535 || cfg.Stack.NodePortMin > cfg.Stack.NodePortMax {
+		errs = append(errs, errors.New("STACK_NODEPORT range is invalid"))
+	}
+
+	if cfg.Stack.ResourceReserveRatio < 0 || cfg.Stack.ResourceReserveRatio >= 1 {
+		errs = append(errs, errors.New("STACK_RESOURCE_RESERVE_RATIO must be in [0, 1)"))
+	}
+	if cfg.Stack.PortLockTTL <= 0 {
+		errs = append(errs, errors.New("STACK_PORT_LOCK_TTL must be positive"))
+	}
+
+	if cfg.Stack.MaxCPUPerStackMilli <= 0 {
+		errs = append(errs, errors.New("STACK_MAX_CPU must be positive"))
+	}
+
+	if cfg.Stack.MaxMemoryPerStackBytes <= 0 {
+		errs = append(errs, errors.New("STACK_MAX_MEMORY must be positive"))
+	}
+
+	if cfg.Stack.ClusterTotalCPUMilli <= 0 || cfg.Stack.ClusterTotalMemoryBytes <= 0 {
+		errs = append(errs, errors.New("cluster total resources must be positive"))
+	}
+
+	if cfg.Stack.K8sQPS <= 0 {
+		errs = append(errs, errors.New("K8S_CLIENT_QPS must be positive"))
+	}
+
+	if cfg.Stack.K8sBurst <= 0 {
+		errs = append(errs, errors.New("K8S_CLIENT_BURST must be positive"))
+	}
+	if cfg.Stack.SchedulingTimeout <= 0 {
+		errs = append(errs, errors.New("STACK_SCHEDULING_TIMEOUT must be positive"))
+	}
+
+	if !cfg.Stack.UseMockRepository && cfg.Stack.DynamoTableName == "" {
+		errs = append(errs, errors.New("DDB_STACK_TABLE must not be empty when DDB_USE_MOCK=false"))
+	}
+
+	if !cfg.Stack.UseMockRepository && cfg.Stack.AWSRegion == "" {
+		errs = append(errs, errors.New("AWS_REGION must not be empty when DDB_USE_MOCK=false"))
 	}
 
 	if len(errs) == 0 {
@@ -244,6 +483,30 @@ func FormatForLog(cfg Config) string {
 	fmt.Fprintf(&b, "  WebhookBatchSize=%d\n", cfg.Logging.WebhookBatchSize)
 	fmt.Fprintf(&b, "  WebhookBatchWait=%s\n", cfg.Logging.WebhookBatchWait)
 	fmt.Fprintf(&b, "  WebhookMaxChars=%d\n", cfg.Logging.WebhookMaxChars)
+	fmt.Fprintln(&b, "Stack:")
+	fmt.Fprintf(&b, "  Namespace=%s\n", cfg.Stack.Namespace)
+	fmt.Fprintf(&b, "  MaxStacksPerUser=%d\n", cfg.Stack.MaxStacksPerUser)
+	fmt.Fprintf(&b, "  StackTTL=%s\n", cfg.Stack.StackTTL)
+	fmt.Fprintf(&b, "  SchedulerInterval=%s\n", cfg.Stack.SchedulerInterval)
+	fmt.Fprintf(&b, "  NodePortRange=%d-%d\n", cfg.Stack.NodePortMin, cfg.Stack.NodePortMax)
+	fmt.Fprintf(&b, "  PortLockTTL=%s\n", cfg.Stack.PortLockTTL)
+	fmt.Fprintf(&b, "  ResourceReserveRatio=%.2f\n", cfg.Stack.ResourceReserveRatio)
+	fmt.Fprintf(&b, "  MaxCPUPerStackMilli=%d\n", cfg.Stack.MaxCPUPerStackMilli)
+	fmt.Fprintf(&b, "  MaxMemoryPerStackBytes=%d\n", cfg.Stack.MaxMemoryPerStackBytes)
+	fmt.Fprintf(&b, "  ClusterTotalCPUMilli=%d\n", cfg.Stack.ClusterTotalCPUMilli)
+	fmt.Fprintf(&b, "  ClusterTotalMemoryBytes=%d\n", cfg.Stack.ClusterTotalMemoryBytes)
+	fmt.Fprintf(&b, "  DynamoTableName=%s\n", cfg.Stack.DynamoTableName)
+	fmt.Fprintf(&b, "  AWSRegion=%s\n", cfg.Stack.AWSRegion)
+	fmt.Fprintf(&b, "  AWSEndpoint=%s\n", cfg.Stack.AWSEndpoint)
+	fmt.Fprintf(&b, "  AWSProfile=%s\n", cfg.Stack.AWSProfile)
+	fmt.Fprintf(&b, "  DynamoConsistentRead=%t\n", cfg.Stack.DynamoConsistentRead)
+	fmt.Fprintf(&b, "  UseMockRepository=%t\n", cfg.Stack.UseMockRepository)
+	fmt.Fprintf(&b, "  KubeConfigPath=%s\n", cfg.Stack.KubeConfigPath)
+	fmt.Fprintf(&b, "  KubeContext=%s\n", cfg.Stack.KubeContext)
+	fmt.Fprintf(&b, "  K8sQPS=%.2f\n", cfg.Stack.K8sQPS)
+	fmt.Fprintf(&b, "  K8sBurst=%d\n", cfg.Stack.K8sBurst)
+	fmt.Fprintf(&b, "  SchedulingTimeout=%s\n", cfg.Stack.SchedulingTimeout)
+	fmt.Fprintf(&b, "  UseMockKubernetes=%t\n", cfg.Stack.UseMockKubernetes)
 
 	return b.String()
 }
