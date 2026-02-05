@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>SMCTF Container Provisioner</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                margin: 16px;
+                line-height: 1.4;
+            }
+            h1 {
+                margin: 0 0 12px;
+                font-size: 20px;
+            }
+            h2 {
+                margin: 16px 0 8px;
+                font-size: 16px;
+            }
+            section {
+                border: 1px solid #ddd;
+                padding: 12px;
+                margin-bottom: 12px;
+                border-radius: 6px;
+            }
+            .row {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-bottom: 8px;
+            }
+            label {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                min-width: 180px;
+            }
+            input,
+            textarea,
+            button {
+                font: inherit;
+                padding: 6px;
+            }
+            textarea {
+                min-height: 160px;
+                width: 100%;
+            }
+            button {
+                cursor: pointer;
+            }
+            #response {
+                white-space: pre-wrap;
+                background: #f7f7f7;
+                border: 1px solid #ddd;
+                padding: 10px;
+                border-radius: 6px;
+                min-height: 180px;
+            }
+            .muted {
+                color: #666;
+                font-size: 12px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>SMCTF Container Provisioner UI</h1>
+
+        <section>
+            <h2>기본 설정</h2>
+            <div class="row">
+                <label>
+                    API Base URL
+                    <input id="apiBase" type="text" placeholder="http://localhost:8081" />
+                </label>
+                <label>
+                    마지막 stack_id
+                    <input id="lastStackId" type="text" placeholder="생성 후 자동 채움" />
+                </label>
+                <label>
+                    user_id (조회용)
+                    <input id="queryUserId" type="number" value="101" />
+                </label>
+            </div>
+            <div class="row">
+                <button id="btnHealth">GET /healthz</button>
+                <button id="btnListAllStacks">GET /stacks</button>
+                <button id="btnListUserStacks">GET /users/{user_id}/stacks</button>
+                <button id="btnStats">GET /stats</button>
+            </div>
+            <div class="muted">모든 버튼 실행 결과는 하단 Response 패널에 표시됩니다.</div>
+        </section>
+
+        <section>
+            <h2>스택 생성</h2>
+            <div class="row">
+                <label>
+                    user_id
+                    <input id="createUserId" type="number" value="101" />
+                </label>
+                <label>
+                    problem_id
+                    <input id="createProblemId" type="number" value="1001" />
+                </label>
+                <label>
+                    target_port
+                    <input id="createTargetPort" type="number" value="80" />
+                </label>
+            </div>
+            <label>
+                pod_spec (YAML)
+                <textarea id="createPodSpec"></textarea>
+            </label>
+            <div class="row">
+                <button id="btnCreateStack">POST /stacks</button>
+            </div>
+        </section>
+
+        <section>
+            <h2>개별 스택 작업</h2>
+            <div class="row">
+                <label>
+                    stack_id
+                    <input id="stackIdInput" type="text" placeholder="stack-..." />
+                </label>
+            </div>
+            <div class="row">
+                <button id="btnGetStack">GET /stacks/{stack_id}</button>
+                <button id="btnGetStackStatus">GET /stacks/{stack_id}/status</button>
+                <button id="btnDeleteStack">DELETE /stacks/{stack_id}</button>
+            </div>
+        </section>
+
+        <section>
+            <h2>Response</h2>
+            <div id="response">ready</div>
+        </section>
+
+        <script src="./index.js" defer></script>
+    </body>
+</html>
