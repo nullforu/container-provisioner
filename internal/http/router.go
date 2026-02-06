@@ -30,9 +30,21 @@ func NewRouter(ctx context.Context, cfg config.Config, logger *logging.Logger) (
 	if err != nil {
 		return nil, fmt.Errorf("init repository: %w", err)
 	}
+
 	k8s, err := stack.NewKubernetesClientFromConfig(cfg.Stack)
 	if err != nil {
 		return nil, fmt.Errorf("init kubernetes client: %w", err)
+	}
+
+	if cfg.Stack.RequireIngressNP {
+		ok, err := k8s.HasIngressNetworkPolicy(ctx, cfg.Stack.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("check ingress networkpolicy: %w", err)
+		}
+
+		if !ok {
+			return nil, fmt.Errorf("missing ingress networkpolicy in namespace %q", cfg.Stack.Namespace)
+		}
 	}
 
 	service := stack.NewService(cfg.Stack, repo, k8s)

@@ -11,6 +11,7 @@ import (
 	"smctf/internal/config"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -255,6 +256,39 @@ func (c *RealKubernetesClient) NodeExists(ctx context.Context, nodeID string) (b
 	}
 
 	return false, err
+}
+
+func (c *RealKubernetesClient) HasIngressNetworkPolicy(ctx context.Context, namespace string) (bool, error) {
+	if namespace == "" {
+		return false, nil
+	}
+
+	policies, err := c.client.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("list networkpolicies: %w", err)
+	}
+
+	for _, policy := range policies.Items {
+		hasIngressType := false
+		for _, pType := range policy.Spec.PolicyTypes {
+			if pType == networkingv1.PolicyTypeIngress {
+				hasIngressType = true
+				break
+			}
+		}
+
+		if !hasIngressType {
+			continue
+		}
+
+		if len(policy.Spec.Ingress) == 0 {
+			continue
+		}
+
+		return true, nil
+	}
+
+	return false, nil
 }
 
 func (c *RealKubernetesClient) GetNodePublicIP(ctx context.Context, nodeID string) (*string, error) {

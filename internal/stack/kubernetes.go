@@ -15,6 +15,7 @@ type KubernetesClient interface {
 	ListPods(ctx context.Context, namespace string) ([]string, error)
 	ListServices(ctx context.Context, namespace string) ([]string, error)
 	NodeExists(ctx context.Context, nodeID string) (bool, error)
+	HasIngressNetworkPolicy(ctx context.Context, namespace string) (bool, error)
 	GetNodePublicIP(ctx context.Context, nodeID string) (*string, error)
 }
 
@@ -179,6 +180,10 @@ func (m *MockKubernetesClient) NodeExists(_ context.Context, nodeID string) (boo
 	defer m.mu.RUnlock()
 
 	return m.nodes[nodeID], nil
+}
+
+func (m *MockKubernetesClient) HasIngressNetworkPolicy(_ context.Context, _ string) (bool, error) {
+	return true, nil
 }
 
 func (m *MockKubernetesClient) GetNodePublicIP(_ context.Context, nodeID string) (*string, error) {

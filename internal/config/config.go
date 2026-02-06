@@ -59,6 +59,7 @@ type StackConfig struct {
 	K8sBurst          int
 	SchedulingTimeout time.Duration
 	UseMockKubernetes bool
+	RequireIngressNP  bool
 }
 
 func Load() (Config, error) {
@@ -185,6 +186,11 @@ func Load() (Config, error) {
 		errs = append(errs, err)
 	}
 
+	requireIngressNP, err := getEnvBool("STACK_REQUIRE_INGRESS_NETWORK_POLICY", true)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
 	cfg := Config{
 		AppEnv:          appEnv,
 		HTTPAddr:        httpAddr,
@@ -225,6 +231,7 @@ func Load() (Config, error) {
 			K8sBurst:                k8sBurst,
 			SchedulingTimeout:       schedulingTimeout,
 			UseMockKubernetes:       useMockK8s,
+			RequireIngressNP:        requireIngressNP,
 		},
 	}
 
@@ -413,8 +420,13 @@ func validateConfig(cfg Config) error {
 	if cfg.Stack.K8sBurst <= 0 {
 		errs = append(errs, errors.New("K8S_CLIENT_BURST must be positive"))
 	}
+
 	if cfg.Stack.SchedulingTimeout <= 0 {
 		errs = append(errs, errors.New("STACK_SCHEDULING_TIMEOUT must be positive"))
+	}
+
+	if cfg.Stack.RequireIngressNP && cfg.Stack.Namespace == "" {
+		errs = append(errs, errors.New("STACK_REQUIRE_INGRESS_NETWORK_POLICY requires STACK_NAMESPACE"))
 	}
 
 	if !cfg.Stack.UseMockRepository && cfg.Stack.DynamoTableName == "" {
@@ -495,6 +507,7 @@ func FormatForLog(cfg Config) string {
 	fmt.Fprintf(&b, "  K8sBurst=%d\n", cfg.Stack.K8sBurst)
 	fmt.Fprintf(&b, "  SchedulingTimeout=%s\n", cfg.Stack.SchedulingTimeout)
 	fmt.Fprintf(&b, "  UseMockKubernetes=%t\n", cfg.Stack.UseMockKubernetes)
+	fmt.Fprintf(&b, "  RequireIngressNetworkPolicy=%t\n", cfg.Stack.RequireIngressNP)
 
 	return b.String()
 }

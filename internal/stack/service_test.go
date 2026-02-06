@@ -290,6 +290,10 @@ func (f *failingKubernetesClient) NodeExists(_ context.Context, _ string) (bool,
 	return true, nil
 }
 
+func (f *failingKubernetesClient) HasIngressNetworkPolicy(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
 func (f *failingKubernetesClient) GetNodePublicIP(_ context.Context, _ string) (*string, error) {
 	return nil, nil
 }
