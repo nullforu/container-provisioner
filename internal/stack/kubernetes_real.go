@@ -257,6 +257,29 @@ func (c *RealKubernetesClient) NodeExists(ctx context.Context, nodeID string) (b
 	return false, err
 }
 
+func (c *RealKubernetesClient) GetNodePublicIP(ctx context.Context, nodeID string) (*string, error) {
+	if nodeID == "" {
+		return nil, nil
+	}
+
+	node, err := c.client.CoreV1().Nodes().Get(ctx, nodeID, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeExternalIP && addr.Address != "" {
+			return &addr.Address, nil
+		}
+	}
+
+	return nil, nil
+}
+
 func (c *RealKubernetesClient) ensureNamespace(ctx context.Context, ns string) error {
 	_, err := c.client.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
 	if err == nil {

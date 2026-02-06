@@ -35,7 +35,6 @@ type LoggingConfig struct {
 
 type StackConfig struct {
 	Namespace               string
-	MaxStacksPerUser        int
 	StackTTL                time.Duration
 	SchedulerInterval       time.Duration
 	NodePortMin             int
@@ -104,11 +103,6 @@ func Load() (Config, error) {
 	}
 
 	logWebhookMaxChars, err := getEnvInt("LOG_WEBHOOK_MAX_CHARS", 1800)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	maxStacksPerUser, err := getEnvInt("STACK_MAX_PER_USER", 5)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -209,7 +203,6 @@ func Load() (Config, error) {
 		},
 		Stack: StackConfig{
 			Namespace:               getEnv("STACK_NAMESPACE", "stacks"),
-			MaxStacksPerUser:        maxStacksPerUser,
 			StackTTL:                stackTTL,
 			SchedulerInterval:       schedulerInterval,
 			NodePortMin:             nodePortMin,
@@ -382,10 +375,6 @@ func validateConfig(cfg Config) error {
 		errs = append(errs, errors.New("STACK_NAMESPACE must not be empty"))
 	}
 
-	if cfg.Stack.MaxStacksPerUser <= 0 {
-		errs = append(errs, errors.New("STACK_MAX_PER_USER must be positive"))
-	}
-
 	if cfg.Stack.StackTTL <= 0 {
 		errs = append(errs, errors.New("STACK_TTL must be positive"))
 	}
@@ -485,7 +474,6 @@ func FormatForLog(cfg Config) string {
 	fmt.Fprintf(&b, "  WebhookMaxChars=%d\n", cfg.Logging.WebhookMaxChars)
 	fmt.Fprintln(&b, "Stack:")
 	fmt.Fprintf(&b, "  Namespace=%s\n", cfg.Stack.Namespace)
-	fmt.Fprintf(&b, "  MaxStacksPerUser=%d\n", cfg.Stack.MaxStacksPerUser)
 	fmt.Fprintf(&b, "  StackTTL=%s\n", cfg.Stack.StackTTL)
 	fmt.Fprintf(&b, "  SchedulerInterval=%s\n", cfg.Stack.SchedulerInterval)
 	fmt.Fprintf(&b, "  NodePortRange=%d-%d\n", cfg.Stack.NodePortMin, cfg.Stack.NodePortMax)

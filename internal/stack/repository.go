@@ -10,7 +10,6 @@ import (
 )
 
 type CreateConstraints struct {
-	MaxStacksPerUser       int
 	MaxReservedCPUMilli    int64
 	MaxReservedMemoryBytes int64
 }
@@ -19,7 +18,6 @@ type Repository interface {
 	Create(ctx context.Context, st Stack, constraints CreateConstraints) error
 	Get(ctx context.Context, stackID string) (Stack, bool, error)
 	Delete(ctx context.Context, stackID string) (Stack, bool, error)
-	ListByUser(ctx context.Context, userID int64) ([]Stack, error)
 	ListAll(ctx context.Context) ([]Stack, error)
 	ReserveNodePort(ctx context.Context, min, max int) (int, error)
 	ReleaseNodePort(ctx context.Context, port int) error
@@ -28,14 +26,12 @@ type Repository interface {
 }
 
 type InMemoryRepository struct {
-	mu               sync.RWMutex
-	stacks           map[string]Stack
-	userProblemIndex map[string]string
-	ports            map[int]string
-	userCount        map[int64]int
-	reservedCPU      int64
-	reservedMemory   int64
-	rand             *rand.Rand
+	mu             sync.RWMutex
+	stacks         map[string]Stack
+	ports          map[int]string
+	reservedCPU    int64
+	reservedMemory int64
+	rand           *rand.Rand
 }
 
 func NewInMemoryRepository(seed int64) *InMemoryRepository {
@@ -44,11 +40,9 @@ func NewInMemoryRepository(seed int64) *InMemoryRepository {
 	}
 
 	return &InMemoryRepository{
-		stacks:           make(map[string]Stack),
-		userProblemIndex: make(map[string]string),
-		ports:            make(map[int]string),
-		userCount:        make(map[int64]int),
-		rand:             rand.New(rand.NewSource(seed)),
+		stacks: make(map[string]Stack),
+		ports:  make(map[int]string),
+		rand:   rand.New(rand.NewSource(seed)),
 	}
 }
 
@@ -58,15 +52,6 @@ func (r *InMemoryRepository) Create(_ context.Context, st Stack, constraints Cre
 
 	if _, exists := r.stacks[st.StackID]; exists {
 		return fmt.Errorf("stack id already exists")
-	}
-
-	if constraints.MaxStacksPerUser > 0 && r.userCount[st.UserID] >= constraints.MaxStacksPerUser {
-		return ErrUserStackLimitReached
-	}
-
-	key := userProblemKey(st.UserID, st.ProblemID)
-	if _, exists := r.userProblemIndex[key]; exists {
-		return ErrUserProblemExists
 	}
 
 	if owner, exists := r.ports[st.NodePort]; !exists || owner != "" {
@@ -81,9 +66,7 @@ func (r *InMemoryRepository) Create(_ context.Context, st Stack, constraints Cre
 	}
 
 	r.stacks[st.StackID] = st
-	r.userProblemIndex[key] = st.StackID
 	r.ports[st.NodePort] = st.StackID
-	r.userCount[st.UserID]++
 	r.reservedCPU += st.RequestedMilli
 	r.reservedMemory += st.RequestedBytes
 
@@ -108,14 +91,7 @@ func (r *InMemoryRepository) Delete(_ context.Context, stackID string) (Stack, b
 	}
 
 	delete(r.stacks, stackID)
-	delete(r.userProblemIndex, userProblemKey(st.UserID, st.ProblemID))
 	delete(r.ports, st.NodePort)
-
-	if r.userCount[st.UserID] > 1 {
-		r.userCount[st.UserID]--
-	} else {
-		delete(r.userCount, st.UserID)
-	}
 
 	if r.reservedCPU >= st.RequestedMilli {
 		r.reservedCPU -= st.RequestedMilli
@@ -126,24 +102,6 @@ func (r *InMemoryRepository) Delete(_ context.Context, stackID string) (Stack, b
 	}
 
 	return st, true, nil
-}
-
-func (r *InMemoryRepository) ListByUser(_ context.Context, userID int64) ([]Stack, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	result := make([]Stack, 0)
-	for _, st := range r.stacks {
-		if st.UserID == userID {
-			result = append(result, st)
-		}
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
-	})
-
-	return result, nil
 }
 
 func (r *InMemoryRepository) ListAll(_ context.Context) ([]Stack, error) {
@@ -223,8 +181,4 @@ func (r *InMemoryRepository) UpdateStatus(_ context.Context, stackID string, sta
 	r.stacks[stackID] = st
 
 	return nil
-}
-
-func userProblemKey(userID, problemID int64) string {
-	return fmt.Sprintf("%d:%d", userID, problemID)
 }

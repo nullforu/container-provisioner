@@ -15,6 +15,7 @@ type KubernetesClient interface {
 	ListPods(ctx context.Context, namespace string) ([]string, error)
 	ListServices(ctx context.Context, namespace string) ([]string, error)
 	NodeExists(ctx context.Context, nodeID string) (bool, error)
+	GetNodePublicIP(ctx context.Context, nodeID string) (*string, error)
 }
 
 type ProvisionRequest struct {
@@ -36,6 +37,7 @@ type MockKubernetesClient struct {
 	mu       sync.RWMutex
 	rand     *rand.Rand
 	nodes    map[string]bool
+	nodeIPs  map[string]*string
 	pods     map[string]podState
 	services map[string]string
 }
@@ -59,6 +61,11 @@ func NewMockKubernetesClient(seed int64) *MockKubernetesClient {
 			"worker-a": true,
 			"worker-b": true,
 			"worker-c": true,
+		},
+		nodeIPs: map[string]*string{
+			"worker-a": strPtr("203.0.113.10"),
+			"worker-b": nil,
+			"worker-c": strPtr("203.0.113.12"),
 		},
 		pods:     make(map[string]podState),
 		services: make(map[string]string),
@@ -172,6 +179,17 @@ func (m *MockKubernetesClient) NodeExists(_ context.Context, nodeID string) (boo
 	defer m.mu.RUnlock()
 
 	return m.nodes[nodeID], nil
+}
+
+func (m *MockKubernetesClient) GetNodePublicIP(_ context.Context, nodeID string) (*string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ip, ok := m.nodeIPs[nodeID]
+	if !ok {
+		return nil, nil
+	}
+	return ip, nil
 }
 
 func (m *MockKubernetesClient) pickNodeLocked() (string, error) {

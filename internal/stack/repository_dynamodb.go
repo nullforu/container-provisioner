@@ -54,25 +54,11 @@ func (r *DynamoRepository) Create(ctx context.Context, st Stack, constraints Cre
 	byID[ddbSK] = avS("META")
 	byID["item_type"] = avS("stack_by_id")
 
-	byUser := copyItem(base)
-	byUser[ddbPK] = avS(userPK(st.UserID))
-	byUser[ddbSK] = avS(stackSK(st.StackID))
-	byUser["item_type"] = avS("stack_by_user")
-
 	catalog := copyItem(base)
 	catalog[ddbPK] = avS("STACKS")
 	catalog[ddbSK] = avS(stackSK(st.StackID))
 	catalog["item_type"] = avS("stack_catalog")
 
-	problemLock := map[string]ddtypes.AttributeValue{
-		ddbPK:        avS(userPK(st.UserID)),
-		ddbSK:        avS(problemLockSK(st.ProblemID)),
-		"item_type":  avS("user_problem_lock"),
-		"stack_id":   avS(st.StackID),
-		"created_at": avS(now),
-	}
-
-	keyUserCount := map[string]ddtypes.AttributeValue{ddbPK: avS(userPK(st.UserID)), ddbSK: avS("COUNT")}
 	keyGlobal := map[string]ddtypes.AttributeValue{ddbPK: avS("GLOBAL"), ddbSK: avS("RESOURCES")}
 	keyPort := map[string]ddtypes.AttributeValue{ddbPK: avS("PORTS"), ddbSK: avS(portSK(st.NodePort))}
 	cpuBefore := constraints.MaxReservedCPUMilli - st.RequestedMilli
@@ -84,16 +70,7 @@ func (r *DynamoRepository) Create(ctx context.Context, st Stack, constraints Cre
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []ddtypes.TransactWriteItem{
 			{Put: &ddtypes.Put{TableName: &r.table, Item: byID, ConditionExpression: strPtr("attribute_not_exists(pk) AND attribute_not_exists(sk)")}},
-			{Put: &ddtypes.Put{TableName: &r.table, Item: byUser, ConditionExpression: strPtr("attribute_not_exists(pk) AND attribute_not_exists(sk)")}},
 			{Put: &ddtypes.Put{TableName: &r.table, Item: catalog, ConditionExpression: strPtr("attribute_not_exists(pk) AND attribute_not_exists(sk)")}},
-			{Put: &ddtypes.Put{TableName: &r.table, Item: problemLock, ConditionExpression: strPtr("attribute_not_exists(pk) AND attribute_not_exists(sk)")}},
-			{Update: &ddtypes.Update{
-				TableName:                 &r.table,
-				Key:                       keyUserCount,
-				UpdateExpression:          strPtr("SET stack_count = if_not_exists(stack_count, :zero) + :one, updated_at = :now"),
-				ConditionExpression:       strPtr("attribute_not_exists(stack_count) OR stack_count < :max_stacks"),
-				ExpressionAttributeValues: map[string]ddtypes.AttributeValue{":zero": avN("0"), ":one": avN("1"), ":max_stacks": avN(strconv.Itoa(constraints.MaxStacksPerUser)), ":now": avS(now)},
-			}},
 			{Update: &ddtypes.Update{
 				TableName:           &r.table,
 				Key:                 keyGlobal,
@@ -172,17 +149,8 @@ func (r *DynamoRepository) Delete(ctx context.Context, stackID string) (Stack, b
 				Key:                 map[string]ddtypes.AttributeValue{ddbPK: avS(stackMetaPK(st.StackID)), ddbSK: avS("META")},
 				ConditionExpression: strPtr("attribute_exists(pk) AND attribute_exists(sk)"),
 			}},
-			{Delete: &ddtypes.Delete{TableName: &r.table, Key: map[string]ddtypes.AttributeValue{ddbPK: avS(userPK(st.UserID)), ddbSK: avS(stackSK(st.StackID))}}},
 			{Delete: &ddtypes.Delete{TableName: &r.table, Key: map[string]ddtypes.AttributeValue{ddbPK: avS("STACKS"), ddbSK: avS(stackSK(st.StackID))}}},
-			{Delete: &ddtypes.Delete{TableName: &r.table, Key: map[string]ddtypes.AttributeValue{ddbPK: avS(userPK(st.UserID)), ddbSK: avS(problemLockSK(st.ProblemID))}}},
 			{Delete: &ddtypes.Delete{TableName: &r.table, Key: map[string]ddtypes.AttributeValue{ddbPK: avS("PORTS"), ddbSK: avS(portSK(st.NodePort))}}},
-			{Update: &ddtypes.Update{
-				TableName:                 &r.table,
-				Key:                       map[string]ddtypes.AttributeValue{ddbPK: avS(userPK(st.UserID)), ddbSK: avS("COUNT")},
-				UpdateExpression:          strPtr("SET stack_count = if_not_exists(stack_count, :zero) - :one, updated_at = :now"),
-				ConditionExpression:       strPtr("attribute_exists(stack_count) AND stack_count >= :one"),
-				ExpressionAttributeValues: map[string]ddtypes.AttributeValue{":zero": avN("0"), ":one": avN("1"), ":now": avS(now)},
-			}},
 			{Update: &ddtypes.Update{
 				TableName:                 &r.table,
 				Key:                       map[string]ddtypes.AttributeValue{ddbPK: avS("GLOBAL"), ddbSK: avS("RESOURCES")},
@@ -201,45 +169,6 @@ func (r *DynamoRepository) Delete(ctx context.Context, stackID string) (Stack, b
 	}
 
 	return st, true, nil
-}
-
-func (r *DynamoRepository) ListByUser(ctx context.Context, userID int64) ([]Stack, error) {
-	pk := userPK(userID)
-	out := make([]Stack, 0)
-
-	var startKey map[string]ddtypes.AttributeValue
-	for {
-		resp, err := r.client.Query(ctx, &dynamodb.QueryInput{
-			TableName:              &r.table,
-			ConsistentRead:         boolPtr(r.consistentRead),
-			KeyConditionExpression: strPtr("pk = :pk AND begins_with(sk, :prefix)"),
-			ExpressionAttributeValues: map[string]ddtypes.AttributeValue{
-				":pk":     avS(pk),
-				":prefix": avS("STACK#"),
-			},
-			ExclusiveStartKey: startKey,
-		})
-
-		if err != nil {
-			return nil, err
-		}
-
-		for _, item := range resp.Items {
-			st, err := stackFromItem(item)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, st)
-		}
-
-		if len(resp.LastEvaluatedKey) == 0 {
-			break
-		}
-		startKey = resp.LastEvaluatedKey
-	}
-
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
 }
 
 func (r *DynamoRepository) ListAll(ctx context.Context) ([]Stack, error) {
@@ -418,13 +347,6 @@ func (r *DynamoRepository) UpdateStatus(ctx context.Context, stackID string, sta
 			}},
 			{Update: &ddtypes.Update{
 				TableName:                 &r.table,
-				Key:                       map[string]ddtypes.AttributeValue{ddbPK: avS(userPK(st.UserID)), ddbSK: avS(stackSK(st.StackID))},
-				UpdateExpression:          strPtr("SET #status = :status, node_id = :node, updated_at = :now"),
-				ExpressionAttributeNames:  map[string]string{"#status": "status"},
-				ExpressionAttributeValues: values,
-			}},
-			{Update: &ddtypes.Update{
-				TableName:                 &r.table,
 				Key:                       map[string]ddtypes.AttributeValue{ddbPK: avS("STACKS"), ddbSK: avS(stackSK(st.StackID))},
 				UpdateExpression:          strPtr("SET #status = :status, node_id = :node, updated_at = :now"),
 				ExpressionAttributeNames:  map[string]string{"#status": "status"},
@@ -451,13 +373,9 @@ func mapDynamoTxError(err error) error {
 			continue
 		}
 		switch idx {
-		case 3:
-			return ErrUserProblemExists
-		case 4:
-			return ErrUserStackLimitReached
-		case 5:
+		case 2:
 			return ErrClusterSaturated
-		case 6:
+		case 3:
 			return ErrNoAvailableNodePort
 		}
 	}
@@ -481,10 +399,8 @@ func txConditionFailedAt(err error, index int) bool {
 }
 
 func stackToItem(st Stack) map[string]ddtypes.AttributeValue {
-	return map[string]ddtypes.AttributeValue{
+	item := map[string]ddtypes.AttributeValue{
 		"stack_id":               avS(st.StackID),
-		"user_id":                avN(strconv.FormatInt(st.UserID, 10)),
-		"problem_id":             avN(strconv.FormatInt(st.ProblemID, 10)),
 		"pod_id":                 avS(st.PodID),
 		"namespace":              avS(st.Namespace),
 		"node_id":                avS(st.NodeID),
@@ -499,6 +415,12 @@ func stackToItem(st Stack) map[string]ddtypes.AttributeValue {
 		"requested_cpu_milli":    avN(strconv.FormatInt(st.RequestedMilli, 10)),
 		"requested_memory_bytes": avN(strconv.FormatInt(st.RequestedBytes, 10)),
 	}
+
+	if st.NodePublicIP != nil {
+		item["node_public_ip"] = avS(*st.NodePublicIP)
+	}
+
+	return item
 }
 
 func stackFromItem(item map[string]ddtypes.AttributeValue) (Stack, error) {
@@ -507,19 +429,10 @@ func stackFromItem(item map[string]ddtypes.AttributeValue) (Stack, error) {
 		return Stack{}, err
 	}
 
-	userID, err := attrInt64(item, "user_id")
-	if err != nil {
-		return Stack{}, err
-	}
-
-	problemID, err := attrInt64(item, "problem_id")
-	if err != nil {
-		return Stack{}, err
-	}
-
 	podID, _ := attrString(item, "pod_id")
 	namespace, _ := attrString(item, "namespace")
 	nodeID, _ := attrString(item, "node_id")
+	nodePublicIP := attrStringOptional(item, "node_public_ip")
 	podSpec, _ := attrString(item, "pod_spec")
 	targetPort, _ := attrInt(item, "target_port")
 	nodePort, _ := attrInt(item, "node_port")
@@ -545,11 +458,10 @@ func stackFromItem(item map[string]ddtypes.AttributeValue) (Stack, error) {
 
 	return Stack{
 		StackID:        stackID,
-		UserID:         userID,
-		ProblemID:      problemID,
 		PodID:          podID,
 		Namespace:      namespace,
 		NodeID:         nodeID,
+		NodePublicIP:   nodePublicIP,
 		PodSpecYAML:    podSpec,
 		TargetPort:     targetPort,
 		NodePort:       nodePort,
@@ -575,6 +487,20 @@ func attrString(item map[string]ddtypes.AttributeValue, key string) (string, err
 	}
 
 	return s.Value, nil
+}
+
+func attrStringOptional(item map[string]ddtypes.AttributeValue, key string) *string {
+	v, ok := item[key]
+	if !ok {
+		return nil
+	}
+
+	s, ok := v.(*ddtypes.AttributeValueMemberS)
+	if !ok || s.Value == "" {
+		return nil
+	}
+
+	return &s.Value
 }
 
 func attrInt(item map[string]ddtypes.AttributeValue, key string) (int, error) {
@@ -623,13 +549,9 @@ func copyItem(src map[string]ddtypes.AttributeValue) map[string]ddtypes.Attribut
 
 // helper functions
 
-func userPK(userID int64) string        { return "USER#" + strconv.FormatInt(userID, 10) }
 func stackMetaPK(stackID string) string { return "STACK#" + stackID }
 func stackSK(stackID string) string     { return "STACK#" + stackID }
-func problemLockSK(problemID int64) string {
-	return "PROBLEM#" + strconv.FormatInt(problemID, 10)
-}
-func portSK(port int) string { return "PORT#" + strconv.Itoa(port) }
+func portSK(port int) string            { return "PORT#" + strconv.Itoa(port) }
 
 func nowRFC3339() string                  { return time.Now().UTC().Format(time.RFC3339Nano) }
 func avS(v string) ddtypes.AttributeValue { return &ddtypes.AttributeValueMemberS{Value: v} }

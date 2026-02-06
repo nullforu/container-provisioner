@@ -55,7 +55,6 @@ func NewRouter(ctx context.Context, cfg config.Config, logger *logging.Logger) (
 	r.GET("/stacks/:stack_id", h.GetStack)
 	r.GET("/stacks/:stack_id/status", h.GetStackStatus)
 	r.DELETE("/stacks/:stack_id", h.DeleteStack)
-	r.GET("/users/:user_id/stacks", h.ListUserStacks)
 	r.GET("/stats", h.GetStats)
 
 	attachFrontendRoutes(r)

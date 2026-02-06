@@ -14,11 +14,10 @@ const (
 
 type Stack struct {
 	StackID        string    `json:"stack_id"`
-	UserID         int64     `json:"user_id"`
-	ProblemID      int64     `json:"problem_id"`
 	PodID          string    `json:"pod_id"`
 	Namespace      string    `json:"namespace"`
 	NodeID         string    `json:"node_id"`
+	NodePublicIP   *string   `json:"node_public_ip"`
 	PodSpecYAML    string    `json:"pod_spec"`
 	TargetPort     int       `json:"target_port"`
 	NodePort       int       `json:"node_port"`
@@ -32,8 +31,6 @@ type Stack struct {
 }
 
 type CreateInput struct {
-	UserID     int64
-	ProblemID  int64
 	PodSpecYML string
 	TargetPort int
 }
@@ -48,9 +45,10 @@ type Stats struct {
 }
 
 type StackStatusDetail struct {
-	StackID    string    `json:"stack_id"`
-	Status     Status    `json:"status"`
-	TTL        time.Time `json:"ttl"`
-	NodePort   int       `json:"node_port"`
-	TargetPort int       `json:"target_port"`
+	StackID      string    `json:"stack_id"`
+	Status       Status    `json:"status"`
+	TTL          time.Time `json:"ttl"`
+	NodePort     int       `json:"node_port"`
+	TargetPort   int       `json:"target_port"`
+	NodePublicIP *string   `json:"node_public_ip"`
 }
