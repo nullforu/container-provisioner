@@ -7,7 +7,4 @@ spec:
   podSelector: {}
   policyTypes:
     - Ingress
-  ingress:
-    - from:
-        - ipBlock:
-            cidr: 192.168.49.0/24 # For example, adjust to cluster node subnet.
+  ingress: [] # only EKS cluster.
