@@ -106,23 +106,11 @@ function wireEvents() {
 
     byId('btnListAllStacks').addEventListener('click', () => execute('GET /stacks', () => request('GET', '/stacks')))
 
-    byId('btnListUserStacks').addEventListener('click', () =>
-        execute('GET /users/{user_id}/stacks', async () => {
-            const userID = readInt('queryUserId')
-            if (!Number.isFinite(userID) || userID <= 0) {
-                throw new Error('user_id must be positive')
-            }
-            return request('GET', `/users/${userID}/stacks`)
-        }),
-    )
-
     byId('btnStats').addEventListener('click', () => execute('GET /stats', () => request('GET', '/stats')))
 
     byId('btnCreateStack').addEventListener('click', () =>
         execute('POST /stacks', async () => {
             const payload = {
-                user_id: readInt('createUserId'),
-                problem_id: readInt('createProblemId'),
                 target_port: readInt('createTargetPort'),
                 pod_spec: byId('createPodSpec').value,
             }

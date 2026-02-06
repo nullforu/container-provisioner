@@ -15,13 +15,13 @@ import (
 
 type Service struct {
 	cfg       config.StackConfig
-	repo      Repository
-	k8s       KubernetesClient
+	repo      RepositoryClientAPI
+	k8s       KubernetesClientAPI
 	validator *Validator
 	now       func() time.Time
 }
 
-func NewService(cfg config.StackConfig, repo Repository, k8s KubernetesClient) *Service {
+func NewService(cfg config.StackConfig, repo RepositoryClientAPI, k8s KubernetesClientAPI) *Service {
 	return &Service{
 		cfg:       cfg,
 		repo:      repo,
@@ -34,10 +34,6 @@ func NewService(cfg config.StackConfig, repo Repository, k8s KubernetesClient) *
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Stack, error) {
-	if in.UserID <= 0 || in.ProblemID <= 0 {
-		return Stack{}, fmt.Errorf("%w: user_id/problem_id must be positive", ErrInvalidInput)
-	}
-
 	valid, err := s.validator.ValidatePodSpec(in.PodSpecYML, in.TargetPort)
 	if err != nil {
 		return Stack{}, err
@@ -61,8 +57,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Stack, error) {
 	now := s.now()
 	st := Stack{
 		StackID:        stackID,
-		UserID:         in.UserID,
-		ProblemID:      in.ProblemID,
 		Namespace:      s.cfg.Namespace,
 		PodSpecYAML:    valid.SanitizedYAML,
 		TargetPort:     in.TargetPort,
@@ -91,8 +85,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Stack, error) {
 	st.NodeID = result.NodeID
 	st.Status = result.Status
 
+	nodePublicIP, ipErr := s.k8s.GetNodePublicIP(ctx, st.NodeID)
+	if ipErr != nil {
+		log.Printf("level=WARN msg=\"resolve node public ip failed\" stack_id=%s node_id=%s err=%q", st.StackID, st.NodeID, ipErr.Error())
+	}
+	st.NodePublicIP = nodePublicIP
+
 	constraints := CreateConstraints{
-		MaxStacksPerUser:       s.cfg.MaxStacksPerUser,
 		MaxReservedCPUMilli:    int64(float64(s.cfg.ClusterTotalCPUMilli) * (1 - s.cfg.ResourceReserveRatio)),
 		MaxReservedMemoryBytes: int64(float64(s.cfg.ClusterTotalMemoryBytes) * (1 - s.cfg.ResourceReserveRatio)),
 	}
@@ -119,6 +118,7 @@ func (s *Service) Get(ctx context.Context, stackID string) (Stack, error) {
 		return Stack{}, ErrNotFound
 	}
 
+	s.attachNodePublicIP(ctx, &st)
 	return st, nil
 }
 
@@ -188,11 +188,12 @@ func (s *Service) GetStatusDetail(ctx context.Context, stackID string) (StackSta
 	}
 
 	return StackStatusDetail{
-		StackID:    st.StackID,
-		Status:     status,
-		TTL:        st.TTLExpiresAt,
-		NodePort:   st.NodePort,
-		TargetPort: st.TargetPort,
+		StackID:      st.StackID,
+		Status:       status,
+		TTL:          st.TTLExpiresAt,
+		NodePort:     st.NodePort,
+		TargetPort:   st.TargetPort,
+		NodePublicIP: s.nodePublicIP(ctx, st.NodeID),
 	}, nil
 }
 
@@ -215,20 +216,21 @@ func (s *Service) Delete(ctx context.Context, stackID string) error {
 	return err
 }
 
-func (s *Service) ListByUser(ctx context.Context, userID int64) ([]Stack, error) {
-	if userID <= 0 {
-		return nil, fmt.Errorf("%w: user_id must be positive", ErrInvalidInput)
+func (s *Service) ListAll(ctx context.Context) ([]Stack, error) {
+	items, err := s.repo.ListAll(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	return s.repo.ListByUser(ctx, userID)
-}
+	for i := range items {
+		s.attachNodePublicIP(ctx, &items[i])
+	}
 
-func (s *Service) ListAll(ctx context.Context) ([]Stack, error) {
-	return s.repo.ListAll(ctx)
+	return items, nil
 }
 
 func (s *Service) Stats(ctx context.Context) (Stats, error) {
-	items, err := s.repo.ListAll(ctx)
+	items, err := s.ListAll(ctx)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -256,9 +258,26 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
+func (s *Service) attachNodePublicIP(ctx context.Context, st *Stack) {
+	if st == nil {
+		return
+	}
+
+	st.NodePublicIP = s.nodePublicIP(ctx, st.NodeID)
+}
+
+func (s *Service) nodePublicIP(ctx context.Context, nodeID string) *string {
+	ip, err := s.k8s.GetNodePublicIP(ctx, nodeID)
+	if err != nil {
+		log.Printf("level=WARN msg=\"resolve node public ip failed\" node_id=%s err=%q", nodeID, err.Error())
+		return nil
+	}
+	return ip
+}
+
 func (s *Service) CleanupExpiredAndOrphaned(ctx context.Context) {
 	now := s.now()
-	items, err := s.repo.ListAll(ctx)
+	items, err := s.ListAll(ctx)
 	if err != nil {
 		log.Printf("level=ERROR msg=\"list stacks for cleanup failed\" err=%q", err.Error())
 		log.Printf("level=INFO msg=\"cleanup loop completed\" scanned=0 targets=0 cleaned=0 failures=1 resource_scan_errors=0 orphan_scan_errors=0 note=%q", "list stacks failed")
@@ -297,7 +316,7 @@ func (s *Service) CleanupExpiredAndOrphaned(ctx context.Context) {
 		}
 	}
 
-	remainingStacks, err := s.repo.ListAll(ctx)
+	remainingStacks, err := s.ListAll(ctx)
 	if err != nil {
 		orphanScanErrors++
 		failures++
@@ -355,7 +374,7 @@ func (s *Service) CleanupExpiredAndOrphaned(ctx context.Context) {
 			}
 		}
 
-		remainingStacks, err = s.repo.ListAll(ctx)
+		remainingStacks, err = s.ListAll(ctx)
 		if err != nil {
 			orphanScanErrors++
 			failures++

@@ -35,7 +35,6 @@ type LoggingConfig struct {
 
 type StackConfig struct {
 	Namespace               string
-	MaxStacksPerUser        int
 	StackTTL                time.Duration
 	SchedulerInterval       time.Duration
 	NodePortMin             int
@@ -60,6 +59,7 @@ type StackConfig struct {
 	K8sBurst          int
 	SchedulingTimeout time.Duration
 	UseMockKubernetes bool
+	RequireIngressNP  bool
 }
 
 func Load() (Config, error) {
@@ -104,11 +104,6 @@ func Load() (Config, error) {
 	}
 
 	logWebhookMaxChars, err := getEnvInt("LOG_WEBHOOK_MAX_CHARS", 1800)
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	maxStacksPerUser, err := getEnvInt("STACK_MAX_PER_USER", 5)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -191,6 +186,11 @@ func Load() (Config, error) {
 		errs = append(errs, err)
 	}
 
+	requireIngressNP, err := getEnvBool("STACK_REQUIRE_INGRESS_NETWORK_POLICY", true)
+	if err != nil {
+		errs = append(errs, err)
+	}
+
 	cfg := Config{
 		AppEnv:          appEnv,
 		HTTPAddr:        httpAddr,
@@ -209,7 +209,6 @@ func Load() (Config, error) {
 		},
 		Stack: StackConfig{
 			Namespace:               getEnv("STACK_NAMESPACE", "stacks"),
-			MaxStacksPerUser:        maxStacksPerUser,
 			StackTTL:                stackTTL,
 			SchedulerInterval:       schedulerInterval,
 			NodePortMin:             nodePortMin,
@@ -232,6 +231,7 @@ func Load() (Config, error) {
 			K8sBurst:                k8sBurst,
 			SchedulingTimeout:       schedulingTimeout,
 			UseMockKubernetes:       useMockK8s,
+			RequireIngressNP:        requireIngressNP,
 		},
 	}
 
@@ -382,10 +382,6 @@ func validateConfig(cfg Config) error {
 		errs = append(errs, errors.New("STACK_NAMESPACE must not be empty"))
 	}
 
-	if cfg.Stack.MaxStacksPerUser <= 0 {
-		errs = append(errs, errors.New("STACK_MAX_PER_USER must be positive"))
-	}
-
 	if cfg.Stack.StackTTL <= 0 {
 		errs = append(errs, errors.New("STACK_TTL must be positive"))
 	}
@@ -424,8 +420,13 @@ func validateConfig(cfg Config) error {
 	if cfg.Stack.K8sBurst <= 0 {
 		errs = append(errs, errors.New("K8S_CLIENT_BURST must be positive"))
 	}
+
 	if cfg.Stack.SchedulingTimeout <= 0 {
 		errs = append(errs, errors.New("STACK_SCHEDULING_TIMEOUT must be positive"))
+	}
+
+	if cfg.Stack.RequireIngressNP && cfg.Stack.Namespace == "" {
+		errs = append(errs, errors.New("STACK_REQUIRE_INGRESS_NETWORK_POLICY requires STACK_NAMESPACE"))
 	}
 
 	if !cfg.Stack.UseMockRepository && cfg.Stack.DynamoTableName == "" {
@@ -485,7 +486,6 @@ func FormatForLog(cfg Config) string {
 	fmt.Fprintf(&b, "  WebhookMaxChars=%d\n", cfg.Logging.WebhookMaxChars)
 	fmt.Fprintln(&b, "Stack:")
 	fmt.Fprintf(&b, "  Namespace=%s\n", cfg.Stack.Namespace)
-	fmt.Fprintf(&b, "  MaxStacksPerUser=%d\n", cfg.Stack.MaxStacksPerUser)
 	fmt.Fprintf(&b, "  StackTTL=%s\n", cfg.Stack.StackTTL)
 	fmt.Fprintf(&b, "  SchedulerInterval=%s\n", cfg.Stack.SchedulerInterval)
 	fmt.Fprintf(&b, "  NodePortRange=%d-%d\n", cfg.Stack.NodePortMin, cfg.Stack.NodePortMax)
@@ -507,6 +507,7 @@ func FormatForLog(cfg Config) string {
 	fmt.Fprintf(&b, "  K8sBurst=%d\n", cfg.Stack.K8sBurst)
 	fmt.Fprintf(&b, "  SchedulingTimeout=%s\n", cfg.Stack.SchedulingTimeout)
 	fmt.Fprintf(&b, "  UseMockKubernetes=%t\n", cfg.Stack.UseMockKubernetes)
+	fmt.Fprintf(&b, "  RequireIngressNetworkPolicy=%t\n", cfg.Stack.RequireIngressNP)
 
 	return b.String()
 }

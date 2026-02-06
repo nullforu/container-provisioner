@@ -77,15 +77,10 @@
                     마지막 stack_id
                     <input id="lastStackId" type="text" placeholder="생성 후 자동 채움" />
                 </label>
-                <label>
-                    user_id (조회용)
-                    <input id="queryUserId" type="number" value="101" />
-                </label>
             </div>
             <div class="row">
                 <button id="btnHealth">GET /healthz</button>
                 <button id="btnListAllStacks">GET /stacks</button>
-                <button id="btnListUserStacks">GET /users/{user_id}/stacks</button>
                 <button id="btnStats">GET /stats</button>
             </div>
             <div class="muted">모든 버튼 실행 결과는 하단 Response 패널에 표시됩니다.</div>
@@ -94,14 +89,6 @@
         <section>
             <h2>스택 생성</h2>
             <div class="row">
-                <label>
-                    user_id
-                    <input id="createUserId" type="number" value="101" />
-                </label>
-                <label>
-                    problem_id
-                    <input id="createProblemId" type="number" value="1001" />
-                </label>
                 <label>
                     target_port
                     <input id="createTargetPort" type="number" value="80" />
