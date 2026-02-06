@@ -20,10 +20,6 @@ func NewRepositoryFromConfig(ctx context.Context, cfg config.StackConfig) (Repos
 		awscfg.WithRegion(cfg.AWSRegion),
 	}
 
-	if cfg.AWSProfile != "" {
-		loadOpts = append(loadOpts, awscfg.WithSharedConfigProfile(cfg.AWSProfile))
-	}
-
 	awsConfig, err := awscfg.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)

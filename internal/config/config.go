@@ -49,7 +49,6 @@ type StackConfig struct {
 	DynamoTableName      string
 	AWSRegion            string
 	AWSEndpoint          string
-	AWSProfile           string
 	DynamoConsistentRead bool
 	UseMockRepository    bool
 
@@ -222,7 +221,6 @@ func Load() (Config, error) {
 			DynamoTableName:         getEnv("DDB_STACK_TABLE", "smctf-stacks"),
 			AWSRegion:               getEnv("AWS_REGION", "us-east-1"),
 			AWSEndpoint:             getEnv("AWS_ENDPOINT", ""),
-			AWSProfile:              getEnv("AWS_PROFILE", ""),
 			DynamoConsistentRead:    dynamoConsistentRead,
 			UseMockRepository:       useMockRepo,
 			KubeConfigPath:          getEnv("K8S_KUBECONFIG", ""),
@@ -498,7 +496,6 @@ func FormatForLog(cfg Config) string {
 	fmt.Fprintf(&b, "  DynamoTableName=%s\n", cfg.Stack.DynamoTableName)
 	fmt.Fprintf(&b, "  AWSRegion=%s\n", cfg.Stack.AWSRegion)
 	fmt.Fprintf(&b, "  AWSEndpoint=%s\n", cfg.Stack.AWSEndpoint)
-	fmt.Fprintf(&b, "  AWSProfile=%s\n", cfg.Stack.AWSProfile)
 	fmt.Fprintf(&b, "  DynamoConsistentRead=%t\n", cfg.Stack.DynamoConsistentRead)
 	fmt.Fprintf(&b, "  UseMockRepository=%t\n", cfg.Stack.UseMockRepository)
 	fmt.Fprintf(&b, "  KubeConfigPath=%s\n", cfg.Stack.KubeConfigPath)
