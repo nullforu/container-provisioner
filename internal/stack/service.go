@@ -16,12 +16,12 @@ import (
 type Service struct {
 	cfg       config.StackConfig
 	repo      Repository
-	k8s       KubernetesClient
+	k8s       KubernetesInterface
 	validator *Validator
 	now       func() time.Time
 }
 
-func NewService(cfg config.StackConfig, repo Repository, k8s KubernetesClient) *Service {
+func NewService(cfg config.StackConfig, repo Repository, k8s KubernetesInterface) *Service {
 	return &Service{
 		cfg:       cfg,
 		repo:      repo,

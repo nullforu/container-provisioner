@@ -47,10 +47,10 @@ func NewRepositoryFromConfig(ctx context.Context, cfg config.StackConfig) (Repos
 	), nil
 }
 
-func NewKubernetesClientFromConfig(cfg config.StackConfig) (KubernetesClient, error) {
+func NewKubernetesClientFromConfig(cfg config.StackConfig) (KubernetesInterface, error) {
 	if cfg.UseMockKubernetes {
 		return NewMockKubernetesClient(0), nil
 	}
 
-	return NewRealKubernetesClient(cfg)
+	return NewKubernetesClient(cfg)
 }
