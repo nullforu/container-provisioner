@@ -301,10 +301,6 @@ func (c *KubernetesClient) HasIngressNetworkPolicy(ctx context.Context, namespac
 			continue
 		}
 
-		if len(policy.Spec.Ingress) == 0 {
-			continue
-		}
-
 		return true, nil
 	}
 
