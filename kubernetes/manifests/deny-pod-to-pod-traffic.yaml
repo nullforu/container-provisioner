@@ -1,10 +1,36 @@
+# Enable NetworkPolicy in AWS VPC CNI settings. ref: https://docs.aws.amazon.com/eks/latest/userguide/network-policies-troubleshooting.html
+# This NetworkPolicy is based on VPC CNI in AWS EKS cluster. other CNI plugins may require different configurations.
+
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-pod-to-pod-traffic
+  name: allow-stacks-nodeport-ingress
   namespace: stacks
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
-  ingress: [] # only EKS cluster. however, access is possible when accessing the Service DNS or IP address. This is not possible with AWS VPC CNI and Netpol.
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 15.164.180.63/32 # Node Public IP for NodePort access
+        - ipBlock:
+            cidr: 3.38.216.241/32 # Node Public IP for NodePort access
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-ingress-to-backend
+  namespace: backend
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: NotIn
+                values:
+                  - stacks
