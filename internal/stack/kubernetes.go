@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"smctf/internal/config"
@@ -45,8 +46,7 @@ type ProvisionRequest struct {
 	Namespace  string
 	StackID    string
 	PodSpecYML string
-	TargetPort int
-	NodePort   int
+	Ports      []PortMapping
 }
 
 type ProvisionResult struct {
@@ -146,15 +146,21 @@ func (c *KubernetesClient) CreatePodAndService(ctx context.Context, req Provisio
 		return ProvisionResult{}, fmt.Errorf("create pod: %w", err)
 	}
 
-	protocol := corev1.ProtocolTCP
-	for _, cn := range createdPod.Spec.Containers {
-		for _, p := range cn.Ports {
-			if int(p.ContainerPort) == req.TargetPort {
-				if p.Protocol != "" {
-					protocol = p.Protocol
-				}
-			}
+	servicePorts := make([]corev1.ServicePort, 0, len(req.Ports))
+	for _, p := range req.Ports {
+		proto := corev1.ProtocolTCP
+		if strings.EqualFold(p.Protocol, string(corev1.ProtocolUDP)) {
+			proto = corev1.ProtocolUDP
 		}
+
+		name := fmt.Sprintf("p-%d-%s", p.ContainerPort, strings.ToLower(string(proto)))
+		servicePorts = append(servicePorts, corev1.ServicePort{
+			Name:       name,
+			Protocol:   proto,
+			Port:       int32(p.ContainerPort),
+			TargetPort: intstr.FromInt(p.ContainerPort),
+			NodePort:   int32(p.NodePort),
+		})
 	}
 
 	svc := &corev1.Service{
@@ -166,15 +172,7 @@ func (c *KubernetesClient) CreatePodAndService(ctx context.Context, req Provisio
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeNodePort,
 			Selector: map[string]string{"smctf.io/stack-id": req.StackID},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "challenge",
-					Protocol:   protocol,
-					Port:       int32(req.TargetPort),
-					TargetPort: intstr.FromInt(req.TargetPort),
-					NodePort:   int32(req.NodePort),
-				},
-			},
+			Ports:    servicePorts,
 		},
 	}
 

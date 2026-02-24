@@ -21,7 +21,7 @@ func TestServiceCreateAndDelete(t *testing.T) {
 	}, repo, k8s)
 
 	st, err := svc.Create(context.Background(), CreateInput{
-		TargetPort: 5000,
+		TargetPorts: []PortSpec{{ContainerPort: 5000, Protocol: "TCP"}},
 		PodSpecYML: `
 apiVersion: v1
 kind: Pod
@@ -43,8 +43,12 @@ spec:
 		t.Fatalf("create error: %v", err)
 	}
 
-	if st.NodePort < 30000 || st.NodePort > 30010 {
-		t.Fatalf("unexpected node port: %d", st.NodePort)
+	if len(st.Ports) != 1 {
+		t.Fatalf("expected 1 port mapping, got %d", len(st.Ports))
+	}
+
+	if st.Ports[0].NodePort < 30000 || st.Ports[0].NodePort > 30010 {
+		t.Fatalf("unexpected node port: %d", st.Ports[0].NodePort)
 	}
 
 	status, err := svc.GetStatus(context.Background(), st.StackID)
@@ -77,7 +81,7 @@ func TestCleanupRemovesOnlyPodsMissingFromRepository(t *testing.T) {
 	}, repo, k8s)
 
 	st, err := svc.Create(context.Background(), CreateInput{
-		TargetPort: 5000,
+		TargetPorts: []PortSpec{{ContainerPort: 5000, Protocol: "TCP"}},
 		PodSpecYML: `
 apiVersion: v1
 kind: Pod
@@ -164,7 +168,7 @@ func TestCleanupDeletesStackWhenServiceIsMissing(t *testing.T) {
 	}, repo, k8s)
 
 	st, err := svc.Create(context.Background(), CreateInput{
-		TargetPort: 5000,
+		TargetPorts: []PortSpec{{ContainerPort: 5000, Protocol: "TCP"}},
 		PodSpecYML: `
 apiVersion: v1
 kind: Pod
@@ -209,7 +213,7 @@ func TestCleanupDeletesStackWhenPodIsMissing(t *testing.T) {
 	}, repo, k8s)
 
 	st, err := svc.Create(context.Background(), CreateInput{
-		TargetPort: 5000,
+		TargetPorts: []PortSpec{{ContainerPort: 5000, Protocol: "TCP"}},
 		PodSpecYML: `
 apiVersion: v1
 kind: Pod
