@@ -12,6 +12,9 @@ import (
 
 func TestServiceCreateAndDelete(t *testing.T) {
 	repo := NewInMemoryRepository(1)
+	if _, err := repo.ReserveNodePort(context.Background(), 30000, 30000); err != nil {
+		t.Fatalf("reserve nodeport error: %v", err)
+	}
 	k8s := NewMockKubernetesClient(1)
 	svc := NewService(config.StackConfig{
 		Namespace:         "stacks",
@@ -399,6 +402,93 @@ spec:
 
 	if _, err := svc.GetDetails(context.Background(), st.StackID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected stack to be deleted when pod is missing, got err=%v", err)
+	}
+}
+
+type podGoneKubernetesClient struct {
+	listPodsWithCreationCalls int
+}
+
+func (p *podGoneKubernetesClient) CreatePodAndService(_ context.Context, _ ProvisionRequest) (ProvisionResult, error) {
+	return ProvisionResult{}, nil
+}
+
+func (p *podGoneKubernetesClient) DeletePodAndService(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (p *podGoneKubernetesClient) GetPodStatus(_ context.Context, _, _ string) (Status, string, error) {
+	return StatusRunning, "worker-a", nil
+}
+
+func (p *podGoneKubernetesClient) ListPods(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func (p *podGoneKubernetesClient) ListPodsWithCreation(_ context.Context, _ string) (map[string]PodInfo, error) {
+	p.listPodsWithCreationCalls++
+	return map[string]PodInfo{}, nil
+}
+
+func (p *podGoneKubernetesClient) ListServices(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func (p *podGoneKubernetesClient) NodeExists(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
+func (p *podGoneKubernetesClient) HasIngressNetworkPolicy(_ context.Context) (bool, error) {
+	return true, nil
+}
+
+func (p *podGoneKubernetesClient) GetNodePublicIP(_ context.Context, _ string) (*string, error) {
+	return nil, nil
+}
+
+func (p *podGoneKubernetesClient) CountSchedulableNodes(_ context.Context) (int, error) {
+	return 0, nil
+}
+
+func TestCleanupOrphanPodSkipsRepoBackedPods(t *testing.T) {
+	repo := NewInMemoryRepository(1)
+	k8s := &podGoneKubernetesClient{}
+	svc := NewService(config.StackConfig{
+		Namespace:         "stacks",
+		StackTTL:          time.Hour,
+		SchedulerInterval: time.Second,
+		NodePortMin:       30000,
+		NodePortMax:       30010,
+	}, repo, k8s)
+
+	if _, err := repo.ReserveNodePort(context.Background(), 30000, 30000); err != nil {
+		t.Fatalf("reserve nodeport error: %v", err)
+	}
+
+	st := Stack{
+		StackID:        "stack-1",
+		PodID:          "pod-1",
+		Namespace:      "stacks",
+		ServiceName:    "svc-1",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC().Add(-10 * time.Minute),
+		UpdatedAt:      time.Now().UTC().Add(-10 * time.Minute),
+		TTLExpiresAt:   time.Now().UTC().Add(10 * time.Minute),
+		RequestedMilli: 100,
+		RequestedBytes: 1024,
+		Ports: []PortMapping{
+			{ContainerPort: 8080, Protocol: "TCP", NodePort: 30000},
+		},
+	}
+
+	if err := repo.Create(context.Background(), st); err != nil {
+		t.Fatalf("create repo stack error: %v", err)
+	}
+
+	svc.CleanupExpiredAndOrphaned(context.Background())
+
+	if k8s.listPodsWithCreationCalls == 0 {
+		t.Fatalf("expected ListPodsWithCreation to be called")
 	}
 }
 

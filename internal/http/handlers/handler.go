@@ -86,6 +86,38 @@ func (h *Handler) ListStacks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"stacks": items})
 }
 
+type batchDeleteRequest struct {
+	StackIDs []string `json:"stack_ids"`
+}
+
+func (h *Handler) CreateBatchDeleteJob(c *gin.Context) {
+	var req batchDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(fmt.Errorf("bind batch delete request: %w", err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json body"})
+		return
+	}
+
+	jobID, err := h.svc.StartBatchDelete(c.Request.Context(), req.StackIDs)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID})
+}
+
+func (h *Handler) GetBatchDeleteJob(c *gin.Context) {
+	jobID := c.Param("job_id")
+	job, err := h.svc.GetBatchDeleteJob(c.Request.Context(), jobID)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, job)
+}
+
 func (h *Handler) GetStats(c *gin.Context) {
 	stats, err := h.svc.Stats(c.Request.Context())
 	if err != nil {

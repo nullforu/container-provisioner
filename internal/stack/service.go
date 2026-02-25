@@ -317,6 +317,74 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
+func (s *Service) StartBatchDelete(ctx context.Context, stackIDs []string) (string, error) {
+	if len(stackIDs) == 0 {
+		return "", ErrInvalidInput
+	}
+
+	jobID := newJobID()
+	now := s.now()
+	job := BatchDeleteJob{
+		JobID:     jobID,
+		Status:    JobStatusQueued,
+		Total:     len(stackIDs),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := s.repo.CreateBatchDeleteJob(ctx, job); err != nil {
+		return "", err
+	}
+
+	go s.runBatchDelete(jobID, stackIDs)
+
+	return jobID, nil
+}
+
+func (s *Service) GetBatchDeleteJob(ctx context.Context, jobID string) (BatchDeleteJob, error) {
+	job, ok, err := s.repo.GetBatchDeleteJob(ctx, jobID)
+	if err != nil {
+		return BatchDeleteJob{}, err
+	}
+
+	if !ok {
+		return BatchDeleteJob{}, ErrNotFound
+	}
+
+	return job, nil
+}
+
+func (s *Service) runBatchDelete(jobID string, stackIDs []string) {
+	ctx := context.Background()
+	job, ok, err := s.repo.GetBatchDeleteJob(ctx, jobID)
+	if err != nil || !ok {
+		return
+	}
+
+	job.Status = JobStatusRunning
+	job.UpdatedAt = s.now()
+	_ = s.repo.UpdateBatchDeleteJob(ctx, job)
+
+	for _, stackID := range stackIDs {
+		err := s.Delete(ctx, stackID)
+		switch {
+		case err == nil:
+			job.Deleted++
+		case errors.Is(err, ErrNotFound):
+			job.NotFound++
+		default:
+			job.Failed++
+			job.Errors = append(job.Errors, JobError{StackID: stackID, Error: err.Error()})
+		}
+		job.UpdatedAt = s.now()
+		_ = s.repo.UpdateBatchDeleteJob(ctx, job)
+	}
+
+	job.Status = JobStatusCompleted
+	job.UpdatedAt = s.now()
+	_ = s.repo.UpdateBatchDeleteJob(ctx, job)
+}
+
 func (s *Service) attachNodePublicIP(ctx context.Context, st *Stack) {
 	if st == nil {
 		return
@@ -535,6 +603,15 @@ func newStackID() string {
 	}
 
 	return "stack-" + hex.EncodeToString(buf)
+}
+
+func newJobID() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("job-%d", time.Now().UnixNano())
+	}
+
+	return "job-" + hex.EncodeToString(buf)
 }
 
 func mapProvisionError(err error) error {
