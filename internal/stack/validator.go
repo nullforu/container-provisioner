@@ -38,7 +38,7 @@ func (v *Validator) ValidatePodSpec(raw string, targetPorts []PortSpec) (Validat
 	}
 
 	if len(targetPorts) > maxTargetPorts {
-		return ValidationResult{}, fmt.Errorf("%w: target_port exceeds limit", ErrInvalidInput)
+		return ValidationResult{}, fmt.Errorf("%w: target_port exceeds limit (max %d)", ErrInvalidInput, maxTargetPorts)
 	}
 
 	normalizedTargets := make([]PortSpec, 0, len(targetPorts))
