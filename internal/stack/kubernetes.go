@@ -35,7 +35,7 @@ type KubernetesClientAPI interface {
 	DeletePodAndService(ctx context.Context, namespace, podID, serviceName string) error
 	GetPodStatus(ctx context.Context, namespace, podID string) (Status, string, error)
 	ListPods(ctx context.Context, namespace string) ([]string, error)
-	ListPodsWithCreation(ctx context.Context, namespace string) (map[string]time.Time, error)
+	ListPodsWithCreation(ctx context.Context, namespace string) (map[string]PodInfo, error)
 	ListServices(ctx context.Context, namespace string) ([]string, error)
 	NodeExists(ctx context.Context, nodeID string) (bool, error)
 	HasIngressNetworkPolicy(ctx context.Context) (bool, error)
@@ -56,6 +56,11 @@ type ProvisionResult struct {
 	ServiceName string
 	NodeID      string
 	Status      Status
+}
+
+type PodInfo struct {
+	CreatedAt time.Time
+	StackID   string
 }
 
 func NewKubernetesClient(cfg config.StackConfig) (*KubernetesClient, error) {
@@ -265,19 +270,22 @@ func (c *KubernetesClient) ListPods(ctx context.Context, namespace string) ([]st
 	return out, nil
 }
 
-func (c *KubernetesClient) ListPodsWithCreation(ctx context.Context, namespace string) (map[string]time.Time, error) {
+func (c *KubernetesClient) ListPodsWithCreation(ctx context.Context, namespace string) (map[string]PodInfo, error) {
 	podList, err := c.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)
 	}
 
-	out := make(map[string]time.Time, len(podList.Items))
+	out := make(map[string]PodInfo, len(podList.Items))
 	for _, item := range podList.Items {
 		if item.Name == "" {
 			continue
 		}
 
-		out[item.Name] = item.CreationTimestamp.Time
+		out[item.Name] = PodInfo{
+			CreatedAt: item.CreationTimestamp.Time,
+			StackID:   item.Labels["smctf.io/stack-id"],
+		}
 	}
 
 	return out, nil

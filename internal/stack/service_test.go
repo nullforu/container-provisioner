@@ -149,8 +149,8 @@ func (r *retryingKubernetesClient) ListPods(_ context.Context, _ string) ([]stri
 	return nil, nil
 }
 
-func (r *retryingKubernetesClient) ListPodsWithCreation(_ context.Context, _ string) (map[string]time.Time, error) {
-	return map[string]time.Time{}, nil
+func (r *retryingKubernetesClient) ListPodsWithCreation(_ context.Context, _ string) (map[string]PodInfo, error) {
+	return map[string]PodInfo{}, nil
 }
 
 func (r *retryingKubernetesClient) ListServices(_ context.Context, _ string) ([]string, error) {
@@ -263,6 +263,7 @@ spec:
 		nodeID:    "worker-a",
 		status:    StatusRunning,
 		createdAt: time.Now().UTC().Add(-3 * time.Minute),
+		stackID:   "",
 	}
 	k8s.pods["other-ns-pod"] = podState{
 		namespace: "other",
@@ -271,6 +272,7 @@ spec:
 		nodeID:    "worker-a",
 		status:    StatusRunning,
 		createdAt: time.Now().UTC().Add(-3 * time.Minute),
+		stackID:   "",
 	}
 	k8s.mu.Unlock()
 
@@ -420,8 +422,8 @@ func (f *failingKubernetesClient) ListPods(_ context.Context, _ string) ([]strin
 	return nil, nil
 }
 
-func (f *failingKubernetesClient) ListPodsWithCreation(_ context.Context, _ string) (map[string]time.Time, error) {
-	return map[string]time.Time{}, nil
+func (f *failingKubernetesClient) ListPodsWithCreation(_ context.Context, _ string) (map[string]PodInfo, error) {
+	return map[string]PodInfo{}, nil
 }
 
 func (f *failingKubernetesClient) ListServices(_ context.Context, _ string) ([]string, error) {

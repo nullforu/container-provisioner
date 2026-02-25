@@ -456,6 +456,7 @@ func (s *Service) CleanupExpiredAndOrphaned(ctx context.Context) {
 				registeredPods[st.PodID] = struct{}{}
 			}
 
+			// Refs: https://github.com/nullforu/container-provisioner-k8s/pull/11
 			podsWithCreation, err := s.k8s.ListPodsWithCreation(ctx, s.cfg.Namespace)
 			if err != nil {
 				orphanScanErrors++
@@ -464,14 +465,26 @@ func (s *Service) CleanupExpiredAndOrphaned(ctx context.Context) {
 			} else {
 				graceCutoff := now.Add(-2 * time.Minute)
 
-				for podID, createdAt := range podsWithCreation {
+				for podID, info := range podsWithCreation {
 					if _, ok := registeredPods[podID]; ok {
 						continue
 					}
 
-					if !createdAt.IsZero() && createdAt.After(graceCutoff) {
-						slog.Info("skipping orphan pod cleanup for recently created pod", slog.String("pod_id", podID), slog.Time("created_at", createdAt), slog.Time("grace_cutoff", graceCutoff))
+					if !info.CreatedAt.IsZero() && info.CreatedAt.After(graceCutoff) {
+						slog.Info("skipping orphan pod cleanup for recently created pod", slog.String("pod_id", podID), slog.Time("created_at", info.CreatedAt), slog.Time("grace_cutoff", graceCutoff))
 						continue
+					}
+
+					if info.StackID != "" {
+						st, ok, getErr := s.repo.Get(ctx, info.StackID)
+						if getErr != nil {
+							slog.Error("orphan cleanup repo get failed", slog.String("pod_id", podID), slog.String("stack_id", info.StackID), slog.Any("error", getErr))
+							continue
+						}
+
+						if ok && st.PodID == podID {
+							continue
+						}
 					}
 
 					orphanPodTargets++
